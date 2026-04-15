@@ -41,7 +41,6 @@ class Graph:
             v1 = self.vertices[i]
             for (j, weight) in self.edges[i]:
                 v2 = self.vertices[j]
-                # evitar duplicados (grafo no dirigido)
                 if i < j:
                     edge_list.append((v1, v2, weight))
         return edge_list
