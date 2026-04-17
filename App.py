@@ -3,9 +3,8 @@ from PySide6.QtWidgets import (
     QLineEdit, QLabel, QFrame, QStackedLayout, QMessageBox,
     QGridLayout
 )
+from ModernMessage import ModernMessage
 from PySide6.QtCore import Qt
-
-# Importaciones de tu lógica (asegúrate de que los archivos existan)
 from GeoUtils import GeoUtils
 from MapView import MapView
 from Graph import Graph
@@ -257,6 +256,20 @@ class App(QWidget):
                 self.input_lat.text(),
                 self.input_lon.text()
             ))
+        elif title == "Eliminar aeropuerto":
+            btn.clicked.connect(lambda: self.panel_remove_airport_helper(
+                self.input_remove.text()
+            ))
+        elif title == "Agregar vuelo":
+            btn.clicked.connect(lambda: self.panel_add_edge_helper(
+                self.edge_origin.text(), 
+                self.edge_dest.text()
+            ))
+        elif title == "Eliminar vuelo":
+            btn.clicked.connect(lambda: self.panel_remove_edge_helper(
+                self.remove_edge_origin.text(), 
+                self.remove_edge_dest.text()
+            ))
         else:
             btn.clicked.connect(self.not_implemented)
         btn_row.addWidget(btn)
@@ -283,29 +296,81 @@ class App(QWidget):
     
     def panel_add_airport_helper(self, code, name, city, country, lat, lon):
         if not (code and name and city and country and lat and lon):
-            QMessageBox.information(self, "Error", "Por favor, rellena todos los campos.")
+            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
+            return
+        if self.graph.find_index(code) != -1:
+            ModernMessage.show_message(self, "¡Error!", f"El aeropuerto {code} ya existe.")
             return
         lat = float(lat)
         lon = float(lon)
         self.graph.add_vertex(self.graph.create_airport(code, name, city, country, lat, lon))
         self.update_map()
-        QMessageBox.information(self, "Agregado", "El nodo ha sido agregado.")
+        ModernMessage.show_message(self, "¡Éxito!", f"El aeropuerto {code} ha sido integrado al sistema.")
 
     def panel_remove_airport(self):
         self.input_remove = QLineEdit()
         return self.build_action_panel("Eliminar aeropuerto", "Retira un nodo.", [("Codigo", self.input_remove)], "Eliminar")
+    
+    def panel_remove_airport_helper(self, code):
+        if not code:
+            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
+            return
+        if self.graph.find_index(code) == -1:
+            ModernMessage.show_message(self, "¡Error!", f"El aeropuerto {code} no existe.")
+            return
+        self.graph.remove_airport(self.graph.find_airport(code))
+        self.update_map()
+        ModernMessage.show_message(self, "¡Éxito!", f"El aeropuerto {code} ha sido eliminado.")
 
     def panel_add_edge(self):
         self.edge_origin = QLineEdit()
         self.edge_dest = QLineEdit()
         return self.build_action_panel("Agregar vuelo", "Conecta dos nodos.", 
                                       [("Origen", self.edge_origin), ("Destino", self.edge_dest)], "Conectar")
+    
+    def panel_add_edge_helper(self, origin, dest):
+        if not (origin and dest):
+            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
+            return
+        if origin == dest:
+            ModernMessage.show_message(self, "¡Error!", "El origen y el destino son iguales.")
+            return
+        if self.graph.find_index(origin) == -1 or self.graph.find_index(dest) == -1:
+            ModernMessage.show_message(self, "¡Error!", "El origen o el destino no existe.")
+            return
+        airport1 = self.graph.find_airport(origin)
+        airport2 = self.graph.find_airport(dest)
+        dist = GeoUtils.haversine(airport1.lat, airport1.lon, airport2.lat, airport2.lon)
+        if self.graph.has_edge(origin, dest):
+            ModernMessage.show_message(self, "¡Error!", f"Ya existe un vuelo {origin} <-> {dest}.")
+            return
+        self.graph.add_edge(self.graph.create_edge(airport1, airport2, dist))
+        self.update_map()
+        ModernMessage.show_message(self, "¡Éxito!", f"El vuelo {origin} <-> {dest} ha sido integrado al sistema.")
 
     def panel_remove_edge(self):
         self.remove_edge_origin = QLineEdit()
         self.remove_edge_dest = QLineEdit()
         return self.build_action_panel("Eliminar vuelo", "Quita una conexion.", 
                                       [("Origen", self.remove_edge_origin), ("Destino", self.remove_edge_dest)], "Quitar")
+    
+    def panel_remove_edge_helper(self, origin, dest):
+        if not (origin and dest):
+            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
+            return
+        if origin == dest:
+            ModernMessage.show_message(self, "¡Error!", "El origen y el destino son iguales.")
+            return
+        if self.graph.find_index(origin) == -1 or self.graph.find_index(dest) == -1:
+            ModernMessage.show_message(self, "¡Error!", "El origen o el destino no existe.")
+            return
+        edge = self.graph.find_edge(origin, dest)
+        if edge is None:
+            ModernMessage.show_message(self, "¡Error!", f"No existe un vuelo {origin} <-> {dest}.")
+            return
+        self.graph.remove_edge(edge)
+        ModernMessage.show_message(self, "¡Éxito!", f"El vuelo {origin} <-> {dest} ha sido eliminado.")
+        self.update_map()
 
     def panel_connected(self):
         card = self.build_action_panel("Conectividad", "Analiza el grafo.", [], "Analizar", "Sin datos.")
@@ -328,7 +393,7 @@ class App(QWidget):
         return self.build_action_panel("Camino Minimo", "Ruta optima.", [("Origen", self.origin), ("Destino", self.dest)], "Calcular", "Sin ruta.")
 
     def not_implemented(self):
-        QMessageBox.information(self, "Pendiente", "Funcion no implementada.")
+            ModernMessage.show_message(self, "Pendiente", "Funcion no implementada.")
 
     # --- LÓGICA DE DATOS Y MAPA ---
     def load_demo_data(self):
@@ -341,7 +406,7 @@ class App(QWidget):
         self.graph.add_vertex(a2)
         
         dist = GeoUtils.haversine(a1.lat, a1.lon, a2.lat, a2.lon)
-        self.graph.add_edge("CTG", "BOG", dist)
+        self.graph.add_edge(self.graph.create_edge(a1, a2, dist))
         
         self.update_map()
 

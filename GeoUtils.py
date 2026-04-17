@@ -1,7 +1,7 @@
 import math
 
 class GeoUtils:
-
+    # calcula la distancia en km entre dos puntos
     @staticmethod
     def haversine(lat1, lon1, lat2, lon2):
         R = 6371  # radio de la Tierra en km
