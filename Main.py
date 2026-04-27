@@ -1,58 +1,61 @@
-from PySide6.QtWidgets import QApplication
+import sys
+import os
+from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import Qt
+
+# Agregar la ruta actual al path
+sys.path.insert(0, os.path.dirname(__file__))
+
 from src.App import App
-from pathlib import Path
-from src.ModernMessage import ModernMessage
 from src.DataLoader import load_graph_from_csv
-from PySide6.QtCore import QThread, Signal
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_FILE = BASE_DIR / "data" / "flights_final.csv"
+def main():
+    try:
+        
+        app = QApplication(sys.argv)
+        
+        print("Creando ventana principal...")
+        window = App()
+        
+        # Intentar cargar los datos
+        csv_paths = [
+            'data/flights_final.csv',
+            '../data/flights_final.csv',
+            os.path.join(os.path.dirname(__file__), 'data', 'flights_final.csv'),
+            os.path.join(os.path.dirname(__file__), '..', 'data', 'flights_final.csv'),
+        ]
+        
+        csv_loaded = False
+        for csv_path in csv_paths:
+            if os.path.exists(csv_path):
+                try:
+                    print(f"Cargando datos desde: {csv_path}")
+                    window.graph = load_graph_from_csv(csv_path)
+                    print(f"Éxito: {window.graph.vertex_count()} aeropuertos cargados")
+                    print(f"{len(window.graph.get_routes())} rutas disponibles")
+                    csv_loaded = True
+                    break
+                except Exception as e:
+                    print(f"Error cargando {csv_path}: {e}")
+        
+        if not csv_loaded:
+            print("ADVERTENCIA: No se encontró el archivo flights_final.csv")
+            print("El grafo estará vacío. Las funcionalidades no funcionarán.")
+            QMessageBox.warning(window, "Datos no encontrados",
+                "No se encontró el archivo flights_final.csv\n\n"
+                "Asegúrate de que el archivo esté en la carpeta 'data/'\n"
+                "El programa funcionará pero el grafo estará vacío.")
+        
+        window.show()
+        print("Ventana mostrada correctamente")
+        print("=" * 50)
+        
+        sys.exit(app.exec())
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        input("Presiona Enter para salir...")
 
-class LoadWorker(QThread):
-    finished = Signal(object)
-    error = Signal(str)
-
-    def __init__(self, path):
-        super().__init__()
-        self.path = path
-
-    def run(self):
-        try:
-            graph = load_graph_from_csv(self.path)
-            self.finished.emit(graph)
-        except Exception as e:
-            self.error.emit(str(e))
-
-class Main:
-    def __init__(self):
-        self.qt_app = QApplication([])
-        self.window = App()
-
-    def run(self):
-        self.window.show()
-        self.qt_app.exec()
-    
-    def cargar_grafo(self):
-        # 🔄 mostrar loader
-        self.window.show_loading("Cargando dataset...")
-        self.worker = LoadWorker(DATA_FILE)
-        self.worker.finished.connect(self.on_graph_loaded)
-        self.worker.error.connect(self.on_load_error)
-        self.worker.start()
-    
-    def on_graph_loaded(self, graph):
-        self.window.graph = graph
-        self.window.update_map()
-        self.window.hide_loading()
-
-    def on_load_error(self, msg):
-        self.window.hide_loading()
-        ModernMessage.show_message(
-        None,
-        "Error al cargar",
-        msg
-        )
-
-main = Main()
-main.cargar_grafo()
-main.run()
+if __name__ == "__main__":
+    main()

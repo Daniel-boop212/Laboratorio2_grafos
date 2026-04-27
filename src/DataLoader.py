@@ -1,11 +1,7 @@
-"""Carga del dataset y construcción del grafo de aeropuertos."""
-
 from __future__ import annotations
-
 import csv
 import math
 from pathlib import Path
-
 from .Airport import Airport
 from .Graph import Graph
 from .Route import Route
@@ -20,7 +16,6 @@ def _build_airport(
     latitude: str,
     longitude: str,
 ) -> Airport:
-    """Construye una instancia Airport a partir de los datos crudos del CSV."""
     return Airport(
         code=code.strip().upper(),
         name=name.strip(),
@@ -32,7 +27,6 @@ def _build_airport(
 
 
 def load_graph_from_csv(file_path: str | Path) -> Graph:
-    """Lee el CSV y devuelve el grafo completo del laboratorio."""
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(path)

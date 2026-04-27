@@ -1,3 +1,13 @@
+"""
+Interfaz principal de la aplicación de rutas aéreas.
+Implementa los 5 requerimientos del Laboratorio 2:
+  1. Conectividad y componentes
+  2. Bipartito (componente más grande si no es conexo)
+  3. Árbol de expansión mínima (por componente)
+  4. Info aeropuerto + top-10 caminos más largos
+  5. Camino mínimo entre dos aeropuertos en el mapa
+"""
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
     QLineEdit, QLabel, QFrame, QStackedLayout, QMessageBox,
@@ -5,92 +15,162 @@ from PySide6.QtWidgets import (
 )
 
 from .ModernMessage import ModernMessage
-from PySide6.QtCore import Qt
-from .GeoUtils import GeoUtils
+from PySide6.QtCore import Qt, QThread, Signal
 from .MapView import MapView
 from .Graph import Graph
-from .algorithms import shortest_path_between
-from .algorithms import connected_components
-from PySide6.QtCore import QThread, Signal
+from .algorithms import (
+    shortest_path_between,
+    connected_components,
+    is_bipartite,
+    minimum_spanning_tree,
+    top_farthest_airports,
+)
 
+
+# ─────────────────────────────────────────────
+# Worker: camino mínimo en hilo separado
+# ─────────────────────────────────────────────
 class PathWorker(QThread):
     finished = Signal(dict)
 
     def __init__(self, graph, origin, dest):
         super().__init__()
-        self.graph = graph
+        self.graph  = graph
         self.origin = origin
-        self.dest = dest
+        self.dest   = dest
 
     def run(self):
         result = shortest_path_between(self.graph, self.origin, self.dest)
         self.finished.emit(result)
 
+
+# ─────────────────────────────────────────────
+# Worker: análisis de conectividad en hilo separado
+# ─────────────────────────────────────────────
+class ConnectivityWorker(QThread):
+    finished = Signal(object)
+
+    def __init__(self, graph):
+        super().__init__()
+        self.graph = graph
+
+    def run(self):
+        result = connected_components(self.graph)
+        self.finished.emit(result)
+
+
+# ─────────────────────────────────────────────
+# Worker: MST en hilo separado
+# ─────────────────────────────────────────────
+class MSTWorker(QThread):
+    finished = Signal(object)
+
+    def __init__(self, graph, components):
+        super().__init__()
+        self.graph      = graph
+        self.components = components
+
+    def run(self):
+        results = []
+        for comp in self.components:
+            weight, edges = minimum_spanning_tree(self.graph, comp)
+            results.append((len(comp), weight, edges))
+        self.finished.emit(results)
+
+
+# ─────────────────────────────────────────────
+# Ventana principal
+# ─────────────────────────────────────────────
 class App(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Rutas Aereas")
+        self.setWindowTitle("Rutas Aéreas — Lab 2")
         self.setMinimumSize(1300, 750)
 
         self.current_menu_index = 0
-        self.menu_buttons = []
+        self.menu_buttons       = []
+        self._components_cache  = None   # cache de componentes ya calculadas
 
-        # Tu StyleSheet que ya corregía los "parches" y colores
         self.setStyleSheet("""
             QWidget { background-color: #edf2f7; color: #1f2d3a; font-family: 'Segoe UI'; }
-            QLabel { background-color: transparent; }
-            QFrame#sidebar { background-color: #112433; border-radius: 24px; }
-            QFrame#menuNav { background-color: #183447; border-radius: 20px; }
-            QFrame#heroCard {
-                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #163046, stop: 0.55 #1f5977, stop: 1 #5ea3c4);
+            QLabel  { background-color: transparent; }
+            QFrame#sidebar   { background-color: #112433; border-radius: 24px; }
+            QFrame#menuNav   { background-color: #183447; border-radius: 20px; }
+            QFrame#heroCard  {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #163046, stop:0.55 #1f5977, stop:1 #5ea3c4);
                 border-radius: 22px;
             }
             QFrame#contentCard { background-color: #ffffff; border: 1px solid #d8e2eb; border-radius: 22px; }
-            QFrame#panelCard { background-color: #ffffff; border: 1px solid #dfe7ee; border-radius: 18px; }
-            QFrame#resultCard { background-color: #f6fafc; border: 1px solid #d6e4ee; border-radius: 16px; }
-            
-            QLabel#brandTitle { color: white; font-size: 24px; font-weight: 700; }
-            QLabel#brandSubtitle { color: #bdd5e4; font-size: 13px; }
-            QLabel#sectionEyebrow { color: #c4d9e6; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-            QLabel#heroEyebrow { color: #d8ecf7; font-size: 12px; font-weight: 700; }
-            QLabel#heroTitle { color: white; font-size: 32px; font-weight: 700; }
-            QLabel#heroBody { color: #ebf7ff; font-size: 14px; }
-            QLabel#panelTitle { color: #183447; font-size: 26px; font-weight: 700; }
-            QLabel#fieldLabel { color: #274255; font-size: 13px; font-weight: 600; }
+            QFrame#panelCard   { background-color: #ffffff; border: 1px solid #dfe7ee; border-radius: 18px; }
+            QFrame#resultCard  { background-color: #f6fafc; border: 1px solid #d6e4ee; border-radius: 16px; }
 
-            QPushButton { padding: 12px 16px; border-radius: 12px; background-color: #1d6fa5; color: white; font-weight: 700; border: none; }
+            QLabel#brandTitle    { color: white; font-size: 24px; font-weight: 700; }
+            QLabel#brandSubtitle { color: #bdd5e4; font-size: 13px; }
+            QLabel#sectionEyebrow{ color: #c4d9e6; font-size: 11px; font-weight: 700; }
+            QLabel#heroTitle     { color: white;  font-size: 32px; font-weight: 700; }
+            QLabel#heroBody      { color: #ebf7ff; font-size: 14px; }
+            QLabel#panelTitle    { color: #183447; font-size: 26px; font-weight: 700; }
+            QLabel#fieldLabel    { color: #274255; font-size: 13px; font-weight: 600; }
+
+            QPushButton { padding: 12px 16px; border-radius: 12px; background-color: #1d6fa5;
+                          color: white; font-weight: 700; border: none; }
             QPushButton:hover { background-color: #175b87; }
-            QPushButton#navButton { text-align: left; padding: 14px 16px; background-color: transparent; color: #d6e7f0; }
+            QPushButton#navButton { text-align: left; padding: 14px 16px;
+                                    background-color: transparent; color: #d6e7f0; }
             QPushButton#navButton[active="true"] { background-color: #eef7fc; color: #143246; }
-            QPushButton#secondaryButton { background-color: #eef4f7; color: #1d4358; border: 1px solid #cfdee8; }
-            
-            QLineEdit { padding: 10px 12px; border-radius: 12px; border: 1px solid #ccd7df; background-color: #fbfdfe; }
+
+            QLineEdit { padding: 10px 12px; border-radius: 12px;
+                        border: 1px solid #ccd7df; background-color: #fbfdfe; }
+
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:vertical { width: 10px; background: transparent; margin: 4px; }
+            QScrollBar::handle:vertical { background: #b8c7d6; border-radius: 5px; min-height: 40px; }
+            QScrollBar::handle:vertical:hover { background: #8fb1c9; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """)
 
-        # Inicialización del Grafo
         self.graph = Graph()
-        self.init_ui()
         
-        # Carga inicial de datos demo
-        #self.load_demo_data()
+        # Cargar datos del grafo
+        from .DataLoader import load_graph_from_csv
+        import os
+        
+        csv_path = 'data/flights_final.csv'
+        if os.path.exists(csv_path):
+            try:
+                self.graph = load_graph_from_csv(csv_path)
+                print(f"✅ Datos cargados: {self.graph.vertex_count()} aeropuertos, {len(self.graph.get_routes())} rutas")
+            except Exception as e:
+                print(f"❌ Error al cargar datos: {e}")
+                ModernMessage.show_message(self, "Error", f"Error al cargar datos: {e}")
+        else:
+            print(f"⚠️ No se encontró el archivo: {csv_path}")
+            ModernMessage.show_message(self, "Advertencia", f"No se encontró el archivo {csv_path}\nEl grafo estará vacío.")
+        
+        self.init_ui()
 
+    # ─────────────────────────────────────────
+    # LAYOUT PRINCIPAL
+    # ─────────────────────────────────────────
     def init_ui(self):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(18, 18, 18, 18)
         main_layout.setSpacing(18)
 
-        sidebar = self.create_sidebar()
+        main_layout.addWidget(self.create_sidebar())
 
         self.main_stack = QStackedLayout()
-        # Ahora el stack incluye el Mapa (Index 0) y el Menú (Index 1)
-        self.main_stack.addWidget(self.create_map_view()) 
-        self.main_stack.addWidget(self.create_menu_view())
-
-        main_layout.addWidget(sidebar)
+        self.main_stack.addWidget(self.create_map_view())   # index 0
+        self.main_stack.addWidget(self.create_menu_view())  # index 1
         main_layout.addLayout(self.main_stack, 1)
-        self.switch_main_view(1) # Empezamos en el centro de operaciones
 
+        self.switch_main_view(1)
+
+    # ─────────────────────────────────────────
+    # SIDEBAR
+    # ─────────────────────────────────────────
     def create_sidebar(self):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
@@ -101,123 +181,28 @@ class App(QWidget):
 
         eyebrow = QLabel("Panel principal")
         eyebrow.setObjectName("sectionEyebrow")
-        title = QLabel("Rutas Aereas")
+        title = QLabel("Rutas Aéreas")
         title.setObjectName("brandTitle")
-        
-        self.btn_map = QPushButton("Explorar mapa")
-        self.btn_menu = QPushButton("Centro de operaciones")
-        self.btn_reset_map = QPushButton("Reiniciar mapa")
+
+        btn_map   = QPushButton("Explorar mapa")
+        btn_menu  = QPushButton("Centro de operaciones")
+        btn_reset = QPushButton("Reiniciar mapa")
+
+        btn_map.clicked.connect(lambda checked=False: self.switch_main_view(0))
+        btn_menu.clicked.connect(lambda checked=False: self.switch_main_view(1))
+        btn_reset.clicked.connect(self.reset_map)
 
         layout.addWidget(eyebrow)
         layout.addWidget(title)
-        layout.addWidget(self.btn_map)
-        layout.addWidget(self.btn_menu)
-        layout.addWidget(self.btn_reset_map)
+        layout.addWidget(btn_map)
+        layout.addWidget(btn_menu)
+        layout.addWidget(btn_reset)
         layout.addStretch()
-        
-        self.btn_map.clicked.connect(lambda: self.switch_main_view(0))
-        self.btn_menu.clicked.connect(lambda: self.switch_main_view(1))
-        self.btn_reset_map.clicked.connect(lambda: self.reset_map())
         return sidebar
 
-    def reset_map(self):
-        if hasattr(self, 'map_view'):
-            self.map_view.draw_graph(self.graph)
-        # limpiar resultados
-        if hasattr(self, 'path_result_label'):
-            self.path_result_label.setText("Sin ruta")
-        if hasattr(self, 'loading_label'):
-            self.loading_label.hide()
-        if hasattr(self, 'progress'):
-            self.progress.hide()
-
-    def show_loading(self, text="Cargando..."):
-        if not hasattr(self, "loading_overlay"):
-            from PySide6.QtWidgets import QLabel, QVBoxLayout, QFrame
-
-            self.loading_overlay = QFrame(self)
-            self.loading_overlay.setStyleSheet("""
-            background-color: rgba(0, 0, 0, 120);
-            border-radius: 20px;
-            """)
-            self.loading_overlay.setGeometry(self.rect())
-
-            layout = QVBoxLayout(self.loading_overlay)
-
-            self.loading_label = QLabel(text)
-            self.loading_label.setStyleSheet("color: white; font-size: 20px;")
-            self.loading_label.setAlignment(Qt.AlignCenter)
-
-            self.loading_bar = QProgressBar()
-            self.loading_bar.setRange(0, 0)  # infinito
-
-            layout.addStretch()
-            layout.addWidget(self.loading_label)
-            layout.addWidget(self.loading_bar)
-            layout.addStretch()
-
-        self.loading_label.setText(text)
-        self.loading_overlay.show()
-
-    def hide_loading(self):
-        if hasattr(self, "loading_overlay"):
-            self.loading_overlay.hide()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "loading_overlay"):
-            self.loading_overlay.setGeometry(self.rect()) 
-
-    def switch_main_view(self, index):
-        self.main_stack.setCurrentIndex(index)
-    
-    def wrap_scroll(self, widget):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(widget)
-        scroll.setStyleSheet("""
-QScrollArea {
-    border: none;
-    background: transparent;
-}
-
-/* Scroll vertical */
-QScrollBar:vertical {
-    width: 10px;
-    background: transparent;
-    margin: 4px;
-}
-
-QScrollBar::handle:vertical {
-    background: #b8c7d6;
-    border-radius: 5px;
-    min-height: 40px;
-}
-
-QScrollBar::handle:vertical:hover {
-    background: #8fb1c9;
-}
-
-QScrollBar::handle:vertical:pressed {
-    background: #6f9bb8;
-}
-
-/* Quitar botones */
-QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
-    height: 0px;
-}
-
-/* Fondo cuando no hay scroll */
-QScrollBar::add-page:vertical,
-QScrollBar::sub-page:vertical {
-    background: transparent;
-}
-""")
-        return scroll
-
-    # --- NUEVO: Vista del Mapa integrada ---
+    # ─────────────────────────────────────────
+    # VISTA MAPA
+    # ─────────────────────────────────────────
     def create_map_view(self):
         container = QFrame()
         layout = QVBoxLayout(container)
@@ -226,12 +211,16 @@ QScrollBar::sub-page:vertical {
         layout.addWidget(self.map_view)
         return container
 
+    # ─────────────────────────────────────────
+    # VISTA MENÚ
+    # ─────────────────────────────────────────
     def create_menu_view(self):
         container = QFrame()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(18)
 
+        # ── Nav lateral ──────────────────────
         nav_panel = QFrame()
         nav_panel.setObjectName("menuNav")
         nav_panel.setFixedWidth(290)
@@ -239,25 +228,22 @@ QScrollBar::sub-page:vertical {
         nav_layout.setContentsMargins(18, 18, 18, 18)
 
         self.menu_info = [
-            ("Agregar Aeropuerto", "Registra un nuevo nodo con su identificador y nombre."),
-            ("Eliminar Aeropuerto", "Retira un aeropuerto del grafo y limpia sus conexiones."),
-            ("Agregar Vuelo", "Crea una conexion entre dos aeropuertos existentes."),
-            ("Eliminar Vuelo", "Quita una ruta especifica del mapa de vuelos."),
-            ("Conectividad", "Verifica el estado general de conexion del sistema."),
-            ("Bipartito", "Analiza si la estructura del grafo cumple la condicion."),
-            ("Arbol de Expansion Minima", "Genera una red base eficiente entre aeropuertos."),
-            ("Info Aeropuerto", "Consulta los datos disponibles para un aeropuerto."),
-            ("Camino Minimo", "Encuentra la mejor ruta entre origen y destino.")
+            ("Conectividad",              "Verifica si el grafo es conexo y lista sus componentes."),
+            ("Bipartito",                 "Comprueba si el grafo (o su componente mayor) es bipartito."),
+            ("Árbol de Expansión Mínima", "Calcula el MST de cada componente y su peso total."),
+            ("Info Aeropuerto",           "Consulta datos del aeropuerto y los 10 destinos más lejanos."),
+            ("Camino Mínimo",             "Encuentra y visualiza la ruta óptima entre dos aeropuertos."),
         ]
 
         for index, (title, _) in enumerate(self.menu_info):
-            button = QPushButton(title)
-            button.setObjectName("navButton")
-            button.clicked.connect(lambda _, i=index: self.set_menu_panel(i))
-            nav_layout.addWidget(button)
-            self.menu_buttons.append(button)
+            btn = QPushButton(title)
+            btn.setObjectName("navButton")
+            btn.clicked.connect(lambda checked=False, i=index: self.set_menu_panel(i))
+            nav_layout.addWidget(btn)
+            self.menu_buttons.append(btn)
         nav_layout.addStretch()
 
+        # ── Contenido central ────────────────
         content_panel = QFrame()
         content_panel.setObjectName("contentCard")
         content_layout = QVBoxLayout(content_panel)
@@ -265,24 +251,17 @@ QScrollBar::sub-page:vertical {
 
         hero_card = QFrame()
         hero_card.setObjectName("heroCard")
-        hero_card.setMaximumHeight(160) 
+        hero_card.setMaximumHeight(140)
         hero_layout = QVBoxLayout(hero_card)
-
-        self.menu_header_title = QLabel()
+        self.menu_header_title       = QLabel()
         self.menu_header_title.setObjectName("heroTitle")
         self.menu_header_description = QLabel()
         self.menu_header_description.setObjectName("heroBody")
-        
         hero_layout.addWidget(self.menu_header_title)
         hero_layout.addWidget(self.menu_header_description)
         hero_layout.addStretch()
 
         self.menu_stack = QStackedLayout()
-        self.scroll_wrappers = []
-        self.menu_stack.addWidget(self.wrap_scroll(self.panel_add_airport()))
-        self.menu_stack.addWidget(self.wrap_scroll(self.panel_remove_airport()))
-        self.menu_stack.addWidget(self.wrap_scroll(self.panel_add_edge()))
-        self.menu_stack.addWidget(self.wrap_scroll(self.panel_remove_edge()))
         self.menu_stack.addWidget(self.wrap_scroll(self.panel_connected()))
         self.menu_stack.addWidget(self.wrap_scroll(self.panel_bipartite()))
         self.menu_stack.addWidget(self.wrap_scroll(self.panel_mst()))
@@ -297,7 +276,13 @@ QScrollBar::sub-page:vertical {
         self.set_menu_panel(0)
         return container
 
-    def set_menu_panel(self, index):
+    # ─────────────────────────────────────────
+    # HELPERS UI
+    # ─────────────────────────────────────────
+    def switch_main_view(self, index, _=None):
+        self.main_stack.setCurrentIndex(index)
+
+    def set_menu_panel(self, index, _=None):
         self.menu_stack.setCurrentIndex(index)
         title, description = self.menu_info[index]
         self.menu_header_title.setText(title)
@@ -307,326 +292,452 @@ QScrollBar::sub-page:vertical {
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
-    # --- HELPERS DE UI ---
-    def create_title(self, text, description=None):
-        header = QFrame()
-        layout = QVBoxLayout(header)
-        layout.setContentsMargins(0, 0, 0, 0)
-        title = QLabel(text)
-        title.setObjectName("panelTitle")
-        layout.addWidget(title)
-        if description:
-            body = QLabel(description)
-            body.setObjectName("panelDescription")
-            layout.addWidget(body)
-        return header
+    def wrap_scroll(self, widget):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
 
-    def create_form_row(self, label_text, field):
-        wrapper = QFrame()
-        layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        label = QLabel(label_text)
-        label.setObjectName("fieldLabel")
-        layout.addWidget(label)
-        field.setMaximumHeight(42)
-        layout.addWidget(field)
-        return wrapper
-
-    def create_result_box(self, text="-"):
-        box = QFrame()
-        box.setObjectName("resultCard")
-        layout = QVBoxLayout(box)
-        label = QLabel("Resultado")
-        label.setObjectName("resultLabel")
-        value = QLabel(text)
-        value.setWordWrap(True)
-        layout.addWidget(label)
-        layout.addWidget(value)
-        return box, value
-
-    def build_action_panel(self, title, description, fields, button_text, result_label=None):
-        card = QWidget()
-        card = QFrame()
-        card.setObjectName("panelCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(28, 28, 28, 28)
-        
-        layout.addWidget(self.create_title(title, description))
-
-        form_layout = QGridLayout()
-        for index, (label_text, field) in enumerate(fields):
-            row, col = index // 2, index % 2
-            form_layout.addWidget(self.create_form_row(label_text, field), row, col)
-        layout.addLayout(form_layout)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn = QPushButton(button_text)
-        btn.setMinimumWidth(180)
-        if title == "Agregar aeropuerto":
-            btn.clicked.connect(lambda: self.panel_add_airport_helper(
-                self.input_code.text(), 
-                self.input_name.text(),
-                self.input_city.text(),
-                self.input_country.text(),
-                self.input_lat.text(),
-                self.input_lon.text()
-            ))
-        elif title == "Eliminar aeropuerto":
-            btn.clicked.connect(lambda: self.panel_remove_airport_helper(
-                self.input_remove.text()
-            ))
-        elif title == "Agregar vuelo":
-            btn.clicked.connect(lambda: self.panel_add_edge_helper(
-                self.edge_origin.text(), 
-                self.edge_dest.text()
-            ))
-        elif title == "Eliminar vuelo":
-            btn.clicked.connect(lambda: self.panel_remove_edge_helper(
-                self.remove_edge_origin.text(), 
-                self.remove_edge_dest.text()
-            ))
-        elif title == "Conectividad":
-            btn.clicked.connect(lambda: self.panel_connected_helper())
-        elif title == "Bipartito":
-            btn.clicked.connect(lambda: self.panel_bipartite_helper())
-        elif title == "Camino Minimo":
-            btn.clicked.connect(lambda: self.panel_path_helper(
-                self.origin.text(), 
-                self.dest.text()
-            ))
-        else:
-            btn.clicked.connect(self.not_implemented)
-        btn_row.addWidget(btn)
-        layout.addLayout(btn_row)
-
-        res_widget = None
-        if result_label is not None:
-            result_box, res_widget = self.create_result_box(result_label)
-            layout.addWidget(result_box)
-
-        layout.addStretch() 
-
-        return card
-
-    # --- PANELES ---
-    def panel_add_airport(self):
-        self.input_code = QLineEdit()
-        self.input_name = QLineEdit()
-        self.input_city = QLineEdit()
-        self.input_country = QLineEdit()
-        self.input_lat = QLineEdit()
-        self.input_lon = QLineEdit()
-        return self.build_action_panel("Agregar aeropuerto", "Crea un nuevo nodo.",
-                                      [("Codigo", self.input_code), ("Nombre", self.input_name), ("Ciudad", self.input_city), ("Pais", self.input_country), ("Latitud", self.input_lat), ("Longitud", self.input_lon)], "Agregar")
-    
-    def panel_add_airport_helper(self, code, name, city, country, lat, lon):
-        if not (code and name and city and country and lat and lon):
-            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
-            return
-        if self.graph.find_index(code) != -1:
-            ModernMessage.show_message(self, "¡Error!", f"El aeropuerto {code} ya existe.")
-            return
-        lat = float(lat)
-        lon = float(lon)
-        self.graph.add_vertex(self.graph.create_airport(code, name, city, country, lat, lon))
-        self.update_map()
-        ModernMessage.show_message(self, "¡Éxito!", f"El aeropuerto {code} ha sido integrado al sistema.")
-
-    def panel_remove_airport(self):
-        self.input_remove = QLineEdit()
-        return self.build_action_panel("Eliminar aeropuerto", "Retira un nodo.", [("Codigo", self.input_remove)], "Eliminar")
-    
-    def panel_remove_airport_helper(self, code):
-        if not code:
-            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
-            return
-        if self.graph.find_index(code) == -1:
-            ModernMessage.show_message(self, "¡Error!", f"El aeropuerto {code} no existe.")
-            return
-        self.graph.remove_airport(self.graph.find_airport(code))
-        self.update_map()
-        ModernMessage.show_message(self, "¡Éxito!", f"El aeropuerto {code} ha sido eliminado.")
-
-    def panel_add_edge(self):
-        self.edge_origin = QLineEdit()
-        self.edge_dest = QLineEdit()
-        return self.build_action_panel("Agregar vuelo", "Conecta dos nodos.", 
-                                      [("Origen", self.edge_origin), ("Destino", self.edge_dest)], "Conectar")
-    
-    def panel_add_edge_helper(self, origin, dest):
-        if not (origin and dest):
-            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
-            return
-        if origin == dest:
-            ModernMessage.show_message(self, "¡Error!", "El origen y el destino son iguales.")
-            return
-        if self.graph.find_index(origin) == -1 or self.graph.find_index(dest) == -1:
-            ModernMessage.show_message(self, "¡Error!", "El origen o el destino no existe.")
-            return
-        airport1 = self.graph.find_airport(origin)
-        airport2 = self.graph.find_airport(dest)
-        dist = GeoUtils.haversine(airport1.lat, airport1.lon, airport2.lat, airport2.lon)
-        if self.graph.has_route(origin, dest):
-            ModernMessage.show_message(self, "¡Error!", f"Ya existe un vuelo {origin} <-> {dest}.")
-            return
-        self.graph.add_route(self.graph.create_edge(airport1, airport2, dist))
-        self.update_map()
-        ModernMessage.show_message(self, "¡Éxito!", f"El vuelo {origin} <-> {dest} ha sido integrado al sistema.")
-
-    def panel_remove_edge(self):
-        self.remove_edge_origin = QLineEdit()
-        self.remove_edge_dest = QLineEdit()
-        return self.build_action_panel("Eliminar vuelo", "Quita una conexion.", 
-                                      [("Origen", self.remove_edge_origin), ("Destino", self.remove_edge_dest)], "Quitar")
-    
-    def panel_remove_edge_helper(self, origin, dest):
-        if not (origin and dest):
-            ModernMessage.show_message(self, "¡Error!", "Por favor, rellena todos los campos.")
-            return
-        if origin == dest:
-            ModernMessage.show_message(self, "¡Error!", "El origen y el destino son iguales.")
-            return
-        if self.graph.find_index(origin) == -1 or self.graph.find_index(dest) == -1:
-            ModernMessage.show_message(self, "¡Error!", "El origen o el destino no existe.")
-            return
-        edge = self.graph.find_route(origin, dest)
-        if edge is None:
-            ModernMessage.show_message(self, "¡Error!", f"No existe un vuelo {origin} <-> {dest}.")
-            return
-        self.graph.remove_edge(edge)
-        ModernMessage.show_message(self, "¡Éxito!", f"El vuelo {origin} <-> {dest} ha sido eliminado.")
-        self.update_map()
-
-    def panel_connected(self):
-        card = self.build_action_panel("Conectividad", "Analiza el grafo.", [], "Analizar", "Sin datos.")
-        layout = card.layout()
-
-        # 📍 Label de resultado
-        self.connected_result = card.findChildren(QLabel)[-1]
-
-        # 🔄 Label de carga
-        self.connected_loading = QLabel("Analizando conectividad...")
-        self.connected_loading.setAlignment(Qt.AlignCenter)
-        self.connected_loading.setStyleSheet("color: #1d6fa5; font-weight: bold;")
-        self.connected_loading.hide()
-
-        # ⏳ Barra de progreso
-        self.connected_progress = QProgressBar()
-        self.connected_progress.setRange(0, 0)
-        self.connected_progress.setTextVisible(False)
-        self.connected_progress.hide()
-
-        # 📌 Insertar antes del resultado
-        layout.insertWidget(layout.count() - 2, self.connected_loading)
-        layout.insertWidget(layout.count() - 2, self.connected_progress)
-        
-        return card
-    
-    def panel_connected_helper(self):
-        if not self.graph.vertex_count():
-            ModernMessage.show_message(self, "¡Error!", "El grafo está vacío.")
-            return
-         # 🔄 Mostrar loading
-        self.connected_loading.show()
-        self.connected_progress.show()
-        self.connected_result.setText("")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        components = connected_components(self, self.graph)
-        # 🔚 Ocultar loading
-        self.connected_loading.hide()
-        self.connected_progress.hide()
-        QApplication.restoreOverrideCursor()
-        if not components:
-            ModernMessage.show_message(self, "¡Error!", "No hay componentes conectados.")
-            return
-        if len(components) == 1:
-            text = "El grafo es conexo.\n\nTiene 1 sola componente con "
-            text += f"{len(components[0])} vértices."
-        else:
-            text = "El grafo NO es conexo.\n\n"
-            text += f"Número de componentes: {len(components)}\n\n"
-            for i, comp in enumerate(components):
-                codes = [self.graph.vertices[j].code for j in comp]
-                text += f"Componente {i+1}:\n"
-                text += f"  - Vértices: {len(comp)}\n"
-                text += f"  - Aeropuertos: {codes}\n\n"
-        self.connected_result.setText(text)
-
-    def panel_bipartite(self):
-        return self.build_action_panel("Bipartito", "Comprueba biparticion.", [], "Comprobar", "Sin datos.")
-
-    def panel_mst(self):
-        return self.build_action_panel("Arbol de Expansion Minima", "Calcula el Arbol de Expansion.", [], "Calcular", "Sin datos.")
-
-    def panel_info(self):
-        self.info_code = QLineEdit()
-        return self.build_action_panel("Informacion", "Consulta datos.", [("Codigo", self.info_code)], "Consultar", "Sin datos.")
-    
-    def panel_path(self):
-        self.origin = QLineEdit()
-        self.dest = QLineEdit()
-        card = self.build_action_panel(
-        "Camino Minimo",
-        "Ruta optima.",
-        [("Origen", self.origin), ("Destino", self.dest)],
-        "Calcular",
-        "Sin ruta."
-        )
-        layout = card.layout()
-        # 📍 Label resultado (igual que conectividad)
-        self.path_result_label = card.findChildren(QLabel)[-1]
-        # 🔄 Label de carga (igual estilo que conectividad)
-        self.path_loading = QLabel("Calculando ruta...")
-        self.path_loading.setAlignment(Qt.AlignCenter)
-        self.path_loading.setStyleSheet("color: #1d6fa5; font-weight: bold;")
-        self.path_loading.hide()
-        # ⏳ Barra (igual que conectividad)
-        self.path_progress = QProgressBar()
-        self.path_progress.setRange(0, 0)
-        self.path_progress.setTextVisible(False)
-        self.path_progress.hide()
-        # 📌 Insertar antes del resultado
-        layout.insertWidget(layout.count() - 2, self.path_loading)
-        layout.insertWidget(layout.count() - 2, self.path_progress)
-        return card
-    
-    def panel_path_helper(self, origin, dest):
-        if not origin or not dest:
-            ModernMessage.show_message(self, "Error", "Campos vacíos")
-            return
-        # 🔄 Mostrar loading (igual que conectividad)
-        self.path_loading.show()
-        self.path_progress.show()
-        self.path_result_label.setText("")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        self.worker = PathWorker(self.graph, origin, dest)
-        self.worker.finished.connect(self.on_path_ready)
-        self.worker.start()
-
-    def not_implemented(self):
-            ModernMessage.show_message(self, "Pendiente", "Funcion no implementada.")
-
-    def on_path_ready(self, result):
-        # 🔚 Ocultar loading
-        self.path_loading.hide()
-        self.path_progress.hide()
-        QApplication.restoreOverrideCursor()
-        if not result["reachable"]:
-            self.path_result_label.setText("No hay ruta")
-            return
-        path = result["path"]
-        text = (
-        f"Distancia: {result['distance']:.2f} km\n"
-        f"Ruta: {' → '.join(path)}"
-        )
-        self.path_result_label.setText(text)
-        # dibujar en el mapa
-        self.map_view.draw_path(self.graph, path)
+    def reset_map(self, _=None):
+        if hasattr(self, "map_view") and self.graph.vertex_count() > 0:
+            self.map_view.draw_graph(self.graph)
 
     def update_map(self):
-        """Refresca la visualización del mapa."""
-        if hasattr(self, 'map_view'):
+        if hasattr(self, "map_view"):
             self.map_view.draw_graph(self.graph)
-            print("Aeropuertos:", len(self.graph.get_vertices()))
-            print("Rutas:", len(self.graph.get_edges_for_map()))
+
+    def show_loading(self, text="Cargando..."):
+        if not hasattr(self, "loading_overlay"):
+            self.loading_overlay = QFrame(self)
+            self.loading_overlay.setStyleSheet(
+                "background-color: rgba(0,0,0,120); border-radius: 20px;"
+            )
+            self.loading_overlay.setGeometry(self.rect())
+            lay = QVBoxLayout(self.loading_overlay)
+            self.loading_label = QLabel(text)
+            self.loading_label.setStyleSheet("color: white; font-size: 20px;")
+            self.loading_label.setAlignment(Qt.AlignCenter)
+            self.loading_bar = QProgressBar()
+            self.loading_bar.setRange(0, 0)
+            lay.addStretch()
+            lay.addWidget(self.loading_label)
+            lay.addWidget(self.loading_bar)
+            lay.addStretch()
+        self.loading_label.setText(text)
+        self.loading_overlay.show()
+
+    def hide_loading(self):
+        if hasattr(self, "loading_overlay"):
+            self.loading_overlay.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "loading_overlay"):
+            self.loading_overlay.setGeometry(self.rect())
+
+    # ── Constructores de cards ───────────────
+    def _make_card(self):
+        card = QFrame()
+        card.setObjectName("panelCard")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(28, 28, 28, 28)
+        lay.setSpacing(14)
+        return card, lay
+
+    def _title_label(self, text):
+        lbl = QLabel(text)
+        lbl.setObjectName("panelTitle")
+        return lbl
+
+    def _field_label(self, text):
+        lbl = QLabel(text)
+        lbl.setObjectName("fieldLabel")
+        return lbl
+
+    def _result_box(self, placeholder="Sin datos."):
+        box = QFrame()
+        box.setObjectName("resultCard")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lbl_title = QLabel("Resultado")
+        lbl_title.setObjectName("fieldLabel")
+        lbl_val = QLabel(placeholder)
+        lbl_val.setWordWrap(True)
+        lbl_val.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(lbl_title)
+        lay.addWidget(lbl_val)
+        return box, lbl_val
+
+    def _loading_widgets(self, text):
+        lbl = QLabel(text)
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: #1d6fa5; font-weight: bold;")
+        lbl.hide()
+        bar = QProgressBar()
+        bar.setRange(0, 0)
+        bar.setTextVisible(False)
+        bar.hide()
+        return lbl, bar
+
+    # ─────────────────────────────────────────
+    # PANEL 1 — CONECTIVIDAD
+    # ─────────────────────────────────────────
+    def panel_connected(self):
+        card, lay = self._make_card()
+        lay.addWidget(self._title_label("Conectividad"))
+
+        btn = QPushButton("Analizar")
+        btn.setMinimumWidth(180)
+        btn.clicked.connect(self._run_connectivity)
+
+        self._conn_loading, self._conn_bar = self._loading_widgets("Analizando conectividad...")
+        result_box, self._conn_result = self._result_box()
+
+        lay.addWidget(btn, 0, Qt.AlignLeft)
+        lay.addWidget(self._conn_loading)
+        lay.addWidget(self._conn_bar)
+        lay.addWidget(result_box)
+        lay.addStretch()
+        return card
+
+    def _run_connectivity(self, _=None):
+        if not self.graph.vertex_count():
+            ModernMessage.show_message(self, "Error", "El grafo está vacío.")
+            return
+        self._conn_loading.show()
+        self._conn_bar.show()
+        self._conn_result.setText("")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        self._conn_worker = ConnectivityWorker(self.graph)
+        self._conn_worker.finished.connect(self._on_connectivity_done)
+        self._conn_worker.start()
+
+    def _on_connectivity_done(self, components):
+        self._conn_loading.hide()
+        self._conn_bar.hide()
+        QApplication.restoreOverrideCursor()
+
+        # Guardar en cache para reutilizar en bipartito y MST
+        self._components_cache = components
+
+        n_comp = len(components)
+        if n_comp == 1:
+            text = (
+                f"✅ El grafo ES CONEXO.\n"
+                f"   Una sola componente con {len(components[0])} vértices."
+            )
+        else:
+            text = f"❌ El grafo NO es conexo.\n\nNúmero de componentes: {n_comp}\n\n"
+            # Ordenar por tamaño descendente para mejor legibilidad
+            sorted_comps = sorted(components, key=len, reverse=True)
+            for i, comp in enumerate(sorted_comps, 1):
+                text += f"Componente {i}: {len(comp)} vértice(s)\n"
+
+        self._conn_result.setText(text)
+
+    # ─────────────────────────────────────────
+    # PANEL 2 — BIPARTITO
+    # ─────────────────────────────────────────
+    def panel_bipartite(self):
+        card, lay = self._make_card()
+        lay.addWidget(self._title_label("Verificación Bipartita"))
+
+        btn = QPushButton("Comprobar")
+        btn.setMinimumWidth(180)
+        btn.clicked.connect(self._run_bipartite)
+
+        self._bip_loading, self._bip_bar = self._loading_widgets("Comprobando bipartición...")
+        result_box, self._bip_result = self._result_box()
+
+        lay.addWidget(btn, 0, Qt.AlignLeft)
+        lay.addWidget(self._bip_loading)
+        lay.addWidget(self._bip_bar)
+        lay.addWidget(result_box)
+        lay.addStretch()
+        return card
+
+    def _run_bipartite(self, _=None):
+        if not self.graph.vertex_count():
+            ModernMessage.show_message(self, "Error", "El grafo está vacío.")
+            return
+
+        self._bip_loading.show()
+        self._bip_bar.show()
+        self._bip_result.setText("")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        # Si no hay componentes cacheadas, calcularlas primero
+        if self._components_cache is None:
+            self._components_cache = connected_components(self.graph)
+
+        components = self._components_cache
+
+        if len(components) == 1:
+            # Grafo conexo: verificar todo
+            result, _ = is_bipartite(self.graph, components[0])
+            text = (
+                "✅ El grafo es BIPARTITO."
+                if result
+                else "❌ El grafo NO es bipartito (contiene un ciclo de longitud impar)."
+            )
+        else:
+            # Verificar la componente más grande
+            largest = max(components, key=len)
+            result, _ = is_bipartite(self.graph, largest)
+            scope = f"componente más grande ({len(largest)} vértices)"
+            text = (
+                f"El grafo tiene {len(components)} componentes.\n\n"
+                f"La {scope} "
+                + ("✅ ES BIPARTITA." if result else "❌ NO es bipartita.")
+            )
+
+        self._bip_loading.hide()
+        self._bip_bar.hide()
+        QApplication.restoreOverrideCursor()
+        self._bip_result.setText(text)
+
+    # ─────────────────────────────────────────
+    # PANEL 3 — ÁRBOL DE EXPANSIÓN MÍNIMA
+    # ─────────────────────────────────────────
+    def panel_mst(self):
+        card, lay = self._make_card()
+        lay.addWidget(self._title_label("Árbol de Expansión Mínima"))
+
+        btn = QPushButton("Calcular MST")
+        btn.setMinimumWidth(180)
+        btn.clicked.connect(self._run_mst)
+
+        self._mst_loading, self._mst_bar = self._loading_widgets("Calculando MST...")
+        result_box, self._mst_result = self._result_box()
+
+        lay.addWidget(btn, 0, Qt.AlignLeft)
+        lay.addWidget(self._mst_loading)
+        lay.addWidget(self._mst_bar)
+        lay.addWidget(result_box)
+        lay.addStretch()
+        return card
+
+    def _run_mst(self, _=None):
+        if not self.graph.vertex_count():
+            ModernMessage.show_message(self, "Error", "El grafo está vacío.")
+            return
+
+        self._mst_loading.show()
+        self._mst_bar.show()
+        self._mst_result.setText("")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        if self._components_cache is None:
+            self._components_cache = connected_components(self.graph)
+
+        self._mst_worker = MSTWorker(self.graph, self._components_cache)
+        self._mst_worker.finished.connect(self._on_mst_done)
+        self._mst_worker.start()
+
+    def _on_mst_done(self, results):
+        self._mst_loading.hide()
+        self._mst_bar.hide()
+        QApplication.restoreOverrideCursor()
+
+        # results: list of (n_vertices, total_weight, edges)
+        sorted_res = sorted(results, key=lambda x: x[0], reverse=True)
+
+        if len(sorted_res) == 1:
+            n, w, _ = sorted_res[0]
+            text = (
+                f"El grafo es conexo ({n} vértices).\n\n"
+                f"Peso total del MST: {w:,.2f} km"
+            )
+        else:
+            text = f"El grafo tiene {len(sorted_res)} componentes.\n\n"
+            for i, (n, w, _) in enumerate(sorted_res, 1):
+                text += f"Componente {i}: {n} vértice(s) — MST = {w:,.2f} km\n"
+
+        self._mst_result.setText(text)
+
+    # ─────────────────────────────────────────
+    # PANEL 4 — INFO AEROPUERTO
+    # ─────────────────────────────────────────
+    def panel_info(self):
+        card, lay = self._make_card()
+        lay.addWidget(self._title_label("Info Aeropuerto"))
+
+        self._info_code = QLineEdit()
+        self._info_code.setPlaceholderText("Código IATA, ej: BOG")
+
+        row = QVBoxLayout()
+        row.addWidget(self._field_label("Código del aeropuerto"))
+        row.addWidget(self._info_code)
+        lay.addLayout(row)
+
+        btn = QPushButton("Consultar")
+        btn.setMinimumWidth(180)
+        btn.clicked.connect(self._run_info)
+
+        self._info_loading, self._info_bar = self._loading_widgets("Calculando caminos...")
+        result_box, self._info_result = self._result_box()
+
+        lay.addWidget(btn, 0, Qt.AlignLeft)
+        lay.addWidget(self._info_loading)
+        lay.addWidget(self._info_bar)
+        lay.addWidget(result_box)
+        lay.addStretch()
+        return card
+
+    def _run_info(self, _=None):
+        code = self._info_code.text().strip().upper()
+        if not code:
+            ModernMessage.show_message(self, "Error", "Ingresa un código de aeropuerto.")
+            return
+
+        airport = self.graph.find_airport(code)
+        if airport is None:
+            ModernMessage.show_message(self, "Error", f"No se encontró el aeropuerto '{code}'.")
+            return
+
+        self._info_loading.show()
+        self._info_bar.show()
+        self._info_result.setText("")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        # Ejecutar en hilo para no bloquear la UI
+        class InfoWorker(QThread):
+            finished = Signal(object, object)
+            def __init__(self, graph, code, airport):
+                super().__init__()
+                self.graph   = graph
+                self.code    = code
+                self.airport = airport
+            def run(self):
+                top10 = top_farthest_airports(self.graph, self.code, top_n=10)
+                self.finished.emit(self.airport, top10)
+
+        self._info_worker = InfoWorker(self.graph, code, airport)
+        self._info_worker.finished.connect(self._on_info_done)
+        self._info_worker.start()
+
+    def _on_info_done(self, airport, top10):
+        self._info_loading.hide()
+        self._info_bar.hide()
+        QApplication.restoreOverrideCursor()
+
+        text  = "📍 INFORMACIÓN DEL AEROPUERTO\n"
+        text += f"  Código   : {airport.code}\n"
+        text += f"  Nombre   : {airport.name}\n"
+        text += f"  Ciudad   : {airport.city}\n"
+        text += f"  País     : {airport.country}\n"
+        text += f"  Latitud  : {airport.lat}\n"
+        text += f"  Longitud : {airport.lon}\n\n"
+
+        text += "🏆 TOP-10 AEROPUERTOS MÁS LEJANOS (por camino mínimo)\n"
+        text += "─" * 55 + "\n"
+
+        if not top10:
+            text += "  No hay aeropuertos alcanzables."
+        else:
+            for rank, (ap, dist) in enumerate(top10, 1):
+                text += (
+                    f"  {rank:2}. [{ap.code}] {ap.name}\n"
+                    f"      {ap.city}, {ap.country}\n"
+                    f"      Lat: {ap.lat}  Lon: {ap.lon}\n"
+                    f"      Distancia: {dist:,.2f} km\n\n"
+                )
+
+        self._info_result.setText(text)
+
+    # ─────────────────────────────────────────
+    # PANEL 5 — CAMINO MÍNIMO
+    # ─────────────────────────────────────────
+    def panel_path(self):
+        card, lay = self._make_card()
+        lay.addWidget(self._title_label("Camino Mínimo"))
+
+        self._path_origin = QLineEdit()
+        self._path_origin.setPlaceholderText("Código IATA origen, ej: BOG")
+        self._path_dest   = QLineEdit()
+        self._path_dest.setPlaceholderText("Código IATA destino, ej: JFK")
+
+        grid = QGridLayout()
+        col1 = QVBoxLayout()
+        col1.addWidget(self._field_label("Aeropuerto origen"))
+        col1.addWidget(self._path_origin)
+        col2 = QVBoxLayout()
+        col2.addWidget(self._field_label("Aeropuerto destino"))
+        col2.addWidget(self._path_dest)
+        grid.addLayout(col1, 0, 0)
+        grid.addLayout(col2, 0, 1)
+        lay.addLayout(grid)
+
+        btn = QPushButton("Calcular ruta")
+        btn.setMinimumWidth(180)
+        btn.clicked.connect(self._run_path)
+
+        self._path_loading, self._path_bar = self._loading_widgets("Calculando ruta...")
+        result_box, self._path_result = self._result_box()
+
+        lay.addWidget(btn, 0, Qt.AlignLeft)
+        lay.addWidget(self._path_loading)
+        lay.addWidget(self._path_bar)
+        lay.addWidget(result_box)
+        lay.addStretch()
+        return card
+
+    def _run_path(self, _=None):
+        origin = self._path_origin.text().strip().upper()
+        dest   = self._path_dest.text().strip().upper()
+
+        if not origin or not dest:
+            ModernMessage.show_message(self, "Error", "Completa los dos campos.")
+            return
+        if origin == dest:
+            ModernMessage.show_message(self, "Error", "Origen y destino son iguales.")
+            return
+        if self.graph.find_airport(origin) is None:
+            ModernMessage.show_message(self, "Error", f"No se encontró el aeropuerto '{origin}'.")
+            return
+        if self.graph.find_airport(dest) is None:
+            ModernMessage.show_message(self, "Error", f"No se encontró el aeropuerto '{dest}'.")
+            return
+
+        self._path_loading.show()
+        self._path_bar.show()
+        self._path_result.setText("")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        self._path_worker = PathWorker(self.graph, origin, dest)
+        self._path_worker.finished.connect(self._on_path_done)
+        self._path_worker.start()
+
+    def _on_path_done(self, result):
+        self._path_loading.hide()
+        self._path_bar.hide()
+        QApplication.restoreOverrideCursor()
+
+        if not result["reachable"]:
+            self._path_result.setText("❌ No existe ruta entre esos aeropuertos.")
+            return
+
+        path = result["path"]
+        dist = result["distance"]
+
+        # Mostrar en el mapa y cambiar a la vista del mapa
+        self.map_view.draw_path(self.graph, path)
+        self.switch_main_view(0)
+
+        # Detalles de las escalas
+        lines = [
+            f"✅ Distancia total: {dist:,.2f} km",
+            f"   Escalas: {len(path) - 2}",
+            f"   Ruta: {' → '.join(path)}\n",
+            "─" * 50,
+        ]
+        for code in path:
+            ap = self.graph.find_airport(code)
+            if ap:
+                lines.append(
+                    f"  [{ap.code}] {ap.name} — {ap.city}, {ap.country}\n"
+                    f"         Lat: {ap.lat}  Lon: {ap.lon}"
+                )
+        self._path_result.setText("\n".join(lines))

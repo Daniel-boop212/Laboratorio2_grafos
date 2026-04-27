@@ -4,108 +4,79 @@ from .Route import Route
 
 class Graph:
     def __init__(self):
-        self.vertices = []
-        self.routes = []
-        self.adyacencias = []
+        self.vertices    = []   # lista de Airport
+        self.routes      = []   # lista de Route
+        self.adyacencias = []   # lista de listas [(j, weight), ...]
 
-    def rebuild_adyacencias(self):
-        self.adyacencias = [[] for _ in range(len(self.vertices))]
-        for route in self.routes:
-            i = self.find_index(route.source.code)
-            j = self.find_index(route.destination.code)
-            w = route.weight
-            if i != -1 and j != -1:
-                self.adyacencias[i].append((j, w))
-                self.adyacencias[j].append((i, w))
-
-    # =========================
+    # ─────────────────────────────────────────
     # BÚSQUEDA
-    # =========================
+    # ─────────────────────────────────────────
 
-    def find_index(self, code):
-        for i in range(len(self.vertices)):
-            if self.vertices[i].code == code:
+    def find_index(self, code: str) -> int:
+        """Retorna el índice del aeropuerto con ese código, o -1 si no existe."""
+        for i, airport in enumerate(self.vertices):
+            if airport.code == code:
                 return i
         return -1
 
-    def find_airport(self, code):
+    def find_airport(self, code: str):
+        """Retorna el objeto Airport con ese código, o None."""
         for airport in self.vertices:
             if airport.code == code:
                 return airport
         return None
 
-    def find_route(self, source, destination):
+    def find_route(self, src_code: str, dst_code: str):
+        """Retorna la Route entre dos aeropuertos (sin importar dirección), o None."""
         for route in self.routes:
             if (
-                (route.source.code == source and route.destination.code == destination)
+                (route.source.code == src_code and route.destination.code == dst_code)
                 or
-                (route.source.code == destination and route.destination.code == source)
+                (route.source.code == dst_code and route.destination.code == src_code)
             ):
                 return route
         return None
 
-    # =========================
-    # AGREGAR
-    # =========================
+    def has_route(self, src_code: str, dst_code: str) -> bool:
+        return self.find_route(src_code, dst_code) is not None
 
-    def add_vertex(self, airport):
+    # ─────────────────────────────────────────
+    # CONSTRUCCIÓN (solo para DataLoader)
+    # ─────────────────────────────────────────
+
+    def add_vertex(self, airport: Airport) -> None:
+        """Agrega un vértice si su código no existe ya en el grafo."""
         if self.find_index(airport.code) == -1:
             self.vertices.append(airport)
             self.adyacencias.append([])
 
-    def add_route(self, route):
-        if not route:
+    def add_route(self, route: Route) -> None:
+        """
+        Agrega una arista no dirigida si aún no existe.
+        Requiere que ambos extremos estén ya en el grafo.
+        """
+        if route is None:
             return
-        # verificar existencia de origen y destino
-        source = self.find_index(route.source.code)
-        dest = self.find_index(route.destination.code)
-        if source == -1 or dest == -1:
+        src_i = self.find_index(route.source.code)
+        dst_i = self.find_index(route.destination.code)
+        if src_i == -1 or dst_i == -1:
             return
-        # evitar duplicados
         if self.has_route(route.source.code, route.destination.code):
             return
         self.routes.append(route)
-        self.adyacencias[source].append((dest, route.weight))
-        self.adyacencias[dest].append((source, route.weight))
+        self.adyacencias[src_i].append((dst_i, route.weight))
+        self.adyacencias[dst_i].append((src_i, route.weight))
 
-    def has_route(self, source, destination):
-        for edge in self.routes:
-            if (
-                (edge.source.code == source and edge.destination.code == destination)
-                or
-                (edge.source.code == destination and edge.destination.code == source)
-            ):
-                return True
-        return False
+    # ─────────────────────────────────────────
+    # FACTORY (para DataLoader)
+    # ─────────────────────────────────────────
 
-    # =========================
-    # ELIMINAR
-    # =========================
+    def create_edge(self, source: Airport, destination: Airport, weight: float) -> Route:
+        return Route(source, destination, weight)
 
-    def remove_airport(self, airport):
-        if airport not in self.vertices:
-            return
-
-        self.vertices.remove(airport)
-
-        # 🔥 eliminar rutas asociadas (FORMA SEGURA)
-        self.routes = [
-            r for r in self.routes
-            if r.source.code != airport.code and r.destination.code != airport.code
-        ]
-        self.rebuild_adyacencias()
-
-    def remove_edge(self, edge):
-        if edge in self.routes:
-            self.routes.remove(edge)
-        source = self.find_index(edge.source.code)
-        dest = self.find_index(edge.destination.code)
-        self.adyacencias[source].remove((dest, edge.weight))
-        self.adyacencias[dest].remove((source, edge.weight))
-
-    # =========================
+    # ─────────────────────────────────────────
     # GETTERS
-    # =========================
+    # ─────────────────────────────────────────
 
     def get_vertices(self):
         return self.vertices
@@ -114,38 +85,28 @@ class Graph:
         return self.routes
 
     def get_edges_for_map(self):
-        edge_list = []
-        for edge in self.routes:
-            if edge.source and edge.destination:
-                edge_list.append((edge.source, edge.destination, edge.weight))
-        return edge_list
+        """
+        Retorna lista de tuplas (Airport, Airport, peso) para el mapa.
+        """
+        return [
+            (r.source, r.destination, r.weight)
+            for r in self.routes
+            if r.source and r.destination
+        ]
 
-    # =========================
-    # FACTORY
-    # =========================
-
-    def create_airport(self, code, name, city, country, lat, lon):
-        return Airport(code, name, city, country, lat, lon)
-
-    def create_edge(self, source, destination, weight):
-        return Route(source, destination, weight)
-
-    # =========================
+    # ─────────────────────────────────────────
     # PARA ALGORITMOS
-    # =========================
+    # ─────────────────────────────────────────
+
+    def vertex_count(self) -> int:
+        return len(self.vertices)
 
     def codes(self):
         return [v.code for v in self.vertices]
 
-    def vertex_count(self):
-        return len(self.vertices)
-
-    def neighbors(self, code):
+    def neighbors(self, code: str):
+        """Retorna lista de (codigo_vecino, peso)."""
         i = self.find_index(code)
         if i == -1:
             return []
-        result = []
-        for j, w in self.adyacencias[i]:
-            neighbor_code = self.vertices[j].code
-            result.append((neighbor_code, w))
-        return result
+        return [(self.vertices[j].code, w) for j, w in self.adyacencias[i]]
