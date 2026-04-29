@@ -1,3 +1,13 @@
+"""
+Interfaz principal de la aplicación de rutas aéreas.
+Implementa los 5 requerimientos del Laboratorio 2:
+  1. Conectividad y componentes
+  2. Bipartito (componente más grande si no es conexo)
+  3. Árbol de expansión mínima (por componente)
+  4. Info aeropuerto + top-10 caminos más largos
+  5. Camino mínimo entre dos aeropuertos en el mapa
+"""
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton,
     QLineEdit, QLabel, QFrame, QStackedLayout, QMessageBox,
@@ -131,12 +141,12 @@ class App(QWidget):
         if os.path.exists(csv_path):
             try:
                 self.graph = load_graph_from_csv(csv_path)
-                print(f"Datos cargados: {self.graph.vertex_count()} aeropuertos, {len(self.graph.get_routes())} rutas")
+                print(f"✅ Datos cargados: {self.graph.vertex_count()} aeropuertos, {len(self.graph.get_routes())} rutas")
             except Exception as e:
-                print(f"Error al cargar datos: {e}")
+                print(f"❌ Error al cargar datos: {e}")
                 ModernMessage.show_message(self, "Error", f"Error al cargar datos: {e}")
         else:
-            print(f"No se encontró el archivo: {csv_path}")
+            print(f"⚠️ No se encontró el archivo: {csv_path}")
             ModernMessage.show_message(self, "Advertencia", f"No se encontró el archivo {csv_path}\nEl grafo estará vacío.")
         
         self.init_ui()
@@ -415,11 +425,11 @@ class App(QWidget):
         n_comp = len(components)
         if n_comp == 1:
             text = (
-                f"   El grafo ES CONEXO.\n"
+                f"✅ El grafo ES CONEXO.\n"
                 f"   Una sola componente con {len(components[0])} vértices."
             )
         else:
-            text = f" El grafo NO es conexo.\n\nNúmero de componentes: {n_comp}\n\n"
+            text = f"❌ El grafo NO es conexo.\n\nNúmero de componentes: {n_comp}\n\n"
             # Ordenar por tamaño descendente para mejor legibilidad
             sorted_comps = sorted(components, key=len, reverse=True)
             for i, comp in enumerate(sorted_comps, 1):
@@ -468,9 +478,9 @@ class App(QWidget):
             # Grafo conexo: verificar todo
             result, _ = is_bipartite(self.graph, components[0])
             text = (
-                "El grafo es BIPARTITO."
+                "✅ El grafo es BIPARTITO."
                 if result
-                else " El grafo NO es bipartito (contiene un ciclo de longitud impar)."
+                else "❌ El grafo NO es bipartito (contiene un ciclo de longitud impar)."
             )
         else:
             # Verificar la componente más grande
@@ -480,7 +490,7 @@ class App(QWidget):
             text = (
                 f"El grafo tiene {len(components)} componentes.\n\n"
                 f"La {scope} "
-                + (" ES BIPARTITA." if result else " NO es bipartita.")
+                + ("✅ ES BIPARTITA." if result else "❌ NO es bipartita.")
             )
 
         self._bip_loading.hide()
@@ -613,7 +623,7 @@ class App(QWidget):
         self._info_bar.hide()
         QApplication.restoreOverrideCursor()
 
-        text  = "    INFORMACIÓN DEL AEROPUERTO\n"
+        text  = "📍 INFORMACIÓN DEL AEROPUERTO\n"
         text += f"  Código   : {airport.code}\n"
         text += f"  Nombre   : {airport.name}\n"
         text += f"  Ciudad   : {airport.city}\n"
@@ -621,7 +631,7 @@ class App(QWidget):
         text += f"  Latitud  : {airport.lat}\n"
         text += f"  Longitud : {airport.lon}\n\n"
 
-        text += " TOP-10 AEROPUERTOS MÁS LEJANOS (por camino mínimo)\n"
+        text += "🏆 TOP-10 AEROPUERTOS MÁS LEJANOS (por camino mínimo)\n"
         text += "─" * 55 + "\n"
 
         if not top10:
@@ -706,7 +716,7 @@ class App(QWidget):
         QApplication.restoreOverrideCursor()
 
         if not result["reachable"]:
-            self._path_result.setText("No existe ruta entre esos aeropuertos.")
+            self._path_result.setText("❌ No existe ruta entre esos aeropuertos.")
             return
 
         path = result["path"]
@@ -718,7 +728,7 @@ class App(QWidget):
 
         # Detalles de las escalas
         lines = [
-            f"   Distancia total: {dist:,.2f} km",
+            f"✅ Distancia total: {dist:,.2f} km",
             f"   Escalas: {len(path) - 2}",
             f"   Ruta: {' → '.join(path)}\n",
             "─" * 50,

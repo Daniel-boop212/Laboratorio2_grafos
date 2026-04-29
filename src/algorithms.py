@@ -1,3 +1,7 @@
+"""
+Algoritmos sobre grafos: Dijkstra, componentes conexas, bipartito, MST (Kruskal/Prim).
+"""
+
 from math import inf
 import heapq
 
@@ -156,7 +160,7 @@ def is_bipartite(graph, component_indices=None):
 
 
 # =============================================================================
-# 5. ÁRBOL DE EXPANSIÓN MÍNIMA — Kruskal 
+# 5. ÁRBOL DE EXPANSIÓN MÍNIMA — Kruskal con Union-Find
 # =============================================================================
 
 class _UnionFind:
@@ -231,6 +235,11 @@ def minimum_spanning_tree(graph, component_indices=None):
 # =============================================================================
 
 def top_farthest_airports(graph, start, top_n=10):
+    """
+    Devuelve los top_n aeropuertos alcanzables con el camino mínimo más largo
+    desde 'start', ordenados de mayor a menor distancia.
+    Retorna lista de (airport_obj, distancia_km).
+    """
     distances = dijkstra_from(graph, start)
     if distances is None:
         return []
